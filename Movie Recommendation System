@@ -1,0 +1,93 @@
+import pandas as pd
+
+# Load the dataset
+ratings = pd.read_csv('ratings.csv')  # movieId, userId, rating
+movies = pd.read_csv('movies.csv')    # movieId, title
+
+# View the first few rows of the data
+print(ratings.head())
+print(movies.head())
+# Check for missing values
+print(ratings.isnull().sum())
+
+# Drop rows with missing values (if any)
+ratings.dropna(inplace=True)
+
+# Perform exploratory data analysis (EDA) if needed (e.g., distribution of ratings)
+import matplotlib.pyplot as plt
+
+ratings['rating'].hist(bins=5)
+plt.xlabel('Rating')
+plt.ylabel('Frequency')
+plt.title('Distribution of Movie Ratings')
+plt.show()
+
+# Create a user-item matrix where rows represent users and columns represent movies
+user_item_matrix = ratings.pivot_table(index='userId', columns='movieId', values='rating')
+
+# Fill NaN values with 0 for simplicity in matrix operations
+user_item_matrix.fillna(0, inplace=True)
+
+print(user_item_matrix.head())
+
+from surprise import Reader, Dataset, SVD, accuracy
+from surprise.model_selection import train_test_split
+
+# Load the dataset into surprise's format
+reader = Reader(rating_scale=(0.5, 5.0))
+data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
+
+# Split the dataset into training and testing sets
+trainset, testset = train_test_split(data, test_size=0.2)
+
+# Use SVD algorithm (Singular Value Decomposition) for collaborative filtering
+model = SVD()
+
+# Train the model
+model.fit(trainset)
+
+# Make predictions
+predictions = model.test(testset)
+
+# Evaluate the accuracy of the model using RMSE (Root Mean Squared Error)
+accuracy.rmse(predictions)
+
+def get_top_n_recommendations(user_id, model, movies, n=10):
+    # Get the list of all movie IDs
+    all_movie_ids = movies['movieId'].unique()
+    
+    # Predict ratings for all movies the user hasn't rated yet
+    user_ratings = []
+    for movie_id in all_movie_ids:
+        user_ratings.append((movie_id, model.predict(user_id, movie_id).est))
+    
+    # Sort movies based on predicted rating
+    user_ratings.sort(key=lambda x: x[1], reverse=True)
+    
+    # Get top N movies
+    top_n_movies = [movie_id for movie_id, rating in user_ratings[:n]]
+    
+    # Return movie titles
+    return movies[movies['movieId'].isin(top_n_movies)]['title'].values
+
+# Example: Get top 10 movie recommendations for user with ID 1
+top_n_movies = get_top_n_recommendations(user_id=1, model=model, movies=movies, n=10)
+print(top_n_movies)
+
+from flask import Flask, render_template, request
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+@app.route('/recommend', methods=['POST'])
+def recommend():
+    user_id = int(request.form['userId'])
+    top_n_movies = get_top_n_recommendations(user_id=user_id, model=model, movies=movies, n=10)
+    return render_template('recommendations.html', movies=top_n_movies)
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
