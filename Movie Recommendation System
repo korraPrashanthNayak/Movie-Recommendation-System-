@@ -1,93 +1,102 @@
 import pandas as pd
 
-# Load the dataset
-ratings = pd.read_csv('ratings.csv')  # movieId, userId, rating
-movies = pd.read_csv('movies.csv')    # movieId, title
+# https://files.grouplens.org/datasets/movielens/ml-25m.zip
+movies = pd.read_csv("movies.csv")
+movies.head()
+import re
 
-# View the first few rows of the data
-print(ratings.head())
-print(movies.head())
-# Check for missing values
-print(ratings.isnull().sum())
+def clean_title(title):
+    title = re.sub("[^a-zA-Z0-9 ]", "", title)
+    return title
+movies["clean_title"] = movies["title"].apply(clean_title)
+movies
+from sklearn.feature_extraction.text import TfidfVectorizer
+vectorizer = TfidfVectorizer(ngram_range=(1,2))
 
-# Drop rows with missing values (if any)
-ratings.dropna(inplace=True)
+tfidf = vectorizer.fit_transform(movies["clean_title"])
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
-# Perform exploratory data analysis (EDA) if needed (e.g., distribution of ratings)
-import matplotlib.pyplot as plt
+def search(title):
+    title = clean_title(title)
+    query_vec = vectorizer.transform([title])
+    similarity = cosine_similarity(query_vec, tfidf).flatten()
+    indices = np.argpartition(similarity, -5)[-5:]
+    results = movies.iloc[indices].iloc[::-1]
 
-ratings['rating'].hist(bins=5)
-plt.xlabel('Rating')
-plt.ylabel('Frequency')
-plt.title('Distribution of Movie Ratings')
-plt.show()
+    return results
+import ipywidgets as widgets
+from IPython.display import display
 
-# Create a user-item matrix where rows represent users and columns represent movies
-user_item_matrix = ratings.pivot_table(index='userId', columns='movieId', values='rating')
+movie_input = widgets.Text(
+    value='Toy Story',
+    description='Movie Title:',
+    disabled=False
+)
+movie_list = widgets.Output()
 
-# Fill NaN values with 0 for simplicity in matrix operations
-user_item_matrix.fillna(0, inplace=True)
+def on_type(data):
+    with movie_list:
+        movie_list.clear_output()
+        title = data["new"]
+        if len(title) > 5:
+            display(search(title))
 
-print(user_item_matrix.head())
+movie_input.observe(on_type, names='value')
 
-from surprise import Reader, Dataset, SVD, accuracy
-from surprise.model_selection import train_test_split
 
-# Load the dataset into surprise's format
-reader = Reader(rating_scale=(0.5, 5.0))
-data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
+display(movie_input, movie_list)
+movie_id = 89745
 
-# Split the dataset into training and testing sets
-trainset, testset = train_test_split(data, test_size=0.2)
+#def find_similar_movies(movie_id):
+movie = movies[movies["movieId"] == movie_id]
+ratings = pd.read_csv("ratings.csv")
+ratings.dtypes
+similar_users = ratings[(ratings["movieId"] == movie_id) & (ratings["rating"] > 4)]["userId"].unique()
+similar_user_recs = ratings[(ratings["userId"].isin(similar_users)) & (ratings["rating"] > 4)]["movieId"]
+similar_user_recs = similar_user_recs.value_counts() / len(similar_users)
 
-# Use SVD algorithm (Singular Value Decomposition) for collaborative filtering
-model = SVD()
+similar_user_recs = similar_user_recs[similar_user_recs > .10]all_users = ratings[(ratings["movieId"].isin(similar_user_recs.index)) & (ratings["rating"] > 4)]
+all_user_recs = all_users["movieId"].value_counts() / len(all_users["userId"].unique())
+rec_percentages = pd.concat([similar_user_recs, all_user_recs], axis=1)
+rec_percentages.columns = ["similar", "all"]
+rec_percentages
+rec_percentages["score"] = rec_percentages["similar"] / rec_percentages["all"]
+rec_percentages = rec_percentages.sort_values("score", ascending=False)
+rec_percentages.head(10).merge(movies, left_index=True, right_on="movieId")
+def find_similar_movies(movie_id):
+    similar_users = ratings[(ratings["movieId"] == movie_id) & (ratings["rating"] > 4)]["userId"].unique()
+    similar_user_recs = ratings[(ratings["userId"].isin(similar_users)) & (ratings["rating"] > 4)]["movieId"]
+    similar_user_recs = similar_user_recs.value_counts() / len(similar_users)
 
-# Train the model
-model.fit(trainset)
+    similar_user_recs = similar_user_recs[similar_user_recs > .10]
+    all_users = ratings[(ratings["movieId"].isin(similar_user_recs.index)) & (ratings["rating"] > 4)]
+    all_user_recs = all_users["movieId"].value_counts() / len(all_users["userId"].unique())
+    rec_percentages = pd.concat([similar_user_recs, all_user_recs], axis=1)
+    rec_percentages.columns = ["similar", "all"]
 
-# Make predictions
-predictions = model.test(testset)
+    rec_percentages["score"] = rec_percentages["similar"] / rec_percentages["all"]
+    rec_percentages = rec_percentages.sort_values("score", ascending=False)
+    return rec_percentages.head(10).merge(movies, left_index=True, right_on="movieId")[["score", "title", "genres"]]
+import ipywidgets as widgets
+from IPython.display import display
 
-# Evaluate the accuracy of the model using RMSE (Root Mean Squared Error)
-accuracy.rmse(predictions)
+movie_name_input = widgets.Text(
+    value='Toy Story',
+    description='Movie Title:',
+    disabled=False
+)
+recommendation_list = widgets.Output()
 
-def get_top_n_recommendations(user_id, model, movies, n=10):
-    # Get the list of all movie IDs
-    all_movie_ids = movies['movieId'].unique()
-    
-    # Predict ratings for all movies the user hasn't rated yet
-    user_ratings = []
-    for movie_id in all_movie_ids:
-        user_ratings.append((movie_id, model.predict(user_id, movie_id).est))
-    
-    # Sort movies based on predicted rating
-    user_ratings.sort(key=lambda x: x[1], reverse=True)
-    
-    # Get top N movies
-    top_n_movies = [movie_id for movie_id, rating in user_ratings[:n]]
-    
-    # Return movie titles
-    return movies[movies['movieId'].isin(top_n_movies)]['title'].values
+def on_type(data):
+    with recommendation_list:
+        recommendation_list.clear_output()
+        title = data["new"]
+        if len(title) > 5:
+            results = search(title)
+            movie_id = results.iloc[0]["movieId"]
+            display(find_similar_movies(movie_id))
 
-# Example: Get top 10 movie recommendations for user with ID 1
-top_n_movies = get_top_n_recommendations(user_id=1, model=model, movies=movies, n=10)
-print(top_n_movies)
+movie_name_input.observe(on_type, names='value')
 
-from flask import Flask, render_template, request
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return render_template('index.html')
-
-@app.route('/recommend', methods=['POST'])
-def recommend():
-    user_id = int(request.form['userId'])
-    top_n_movies = get_top_n_recommendations(user_id=user_id, model=model, movies=movies, n=10)
-    return render_template('recommendations.html', movies=top_n_movies)
-
-if __name__ == '__main__':
-    app.run(debug=True)
-
+display(movie_name_input, recommendation_list)
